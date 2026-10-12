@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FX Strategy Lab</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0b1020;color:#e8edf7;font:14px Arial,sans-serif}
+header{padding:18px;background:#111a2e;border-bottom:1px solid #26344d}
+h1{font-size:23px;margin:0 0 7px;color:#61d9b5}
+small{color:#9baac2}
+nav{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+button,select,input{background:#18253b;color:#e8edf7;border:1px solid #35445e;padding:10px;border-radius:7px}
+button{cursor:pointer}
+button:hover{border-color:#61d9b5}
+main{padding:14px;max-width:1500px;margin:auto}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.card,.panel{background:#111a2b;border:1px solid #263650;border-radius:10px;padding:14px}
+.stat{font-size:21px;font-weight:bold;margin-top:8px}
+section{margin-top:14px}
+h2{font-size:16px;margin:0 0 12px}
+.controls{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+#chart{height:430px;width:100%}
+#log{white-space:pre-wrap;line-height:1.8;color:#b8c7dc}
+.note{color:#f3c978;line-height:1.6}
+table{width:100%;border-collapse:collapse}
+td,th{text-align:left;padding:8px;border-bottom:1px solid #263650}
+footer{padding:20px;text-align:center;color:#8b9bb4}
+@media(max-width:650px){
+.stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+#chart{height:340px}
+main{padding:9px}
+}
+</style>
+</head>
+<body>
+<header>
+<h1>◈ FX STRATEGY LAB</h1>
+<small>PRICE ACTION · CHARTS · BACKTESTING</small>
+<nav>
+<button onclick="loadDemo()">Demo Data</button>
+<button onclick="document.getElementById('csv').click()">Import CSV</button>
+<input id="csv" type="file" accept=".csv,text/csv" hidden>
+<button onclick="runTest()">Run Backtest</button>
+<button onclick="downloadTrades()">Export Trades</button>
+</nav>
+</header>
+<main>
+<div class="stats">
+<div class="card"><small>MARKET</small><div class="stat" id="marketLabel">XAUUSD</div></div>
+<div class="card"><small>LAST PRICE</small><div class="stat" id="lastPrice">—</div></div>
+<div class="card"><small>WIN RATE</small><div class="stat" id="winRate">—</div></div>
+<div class="card"><small>NET P/L (price units)</small><div class="stat" id="netPL">—</div></div>
+</div>
+
+<section class="panel">
+<h2>Market Chart</h2>
+<div class="controls">
+<select id="market" onchange="marketChanged()">
+<option>XAUUSD</option><option>EURUSD</option>
+</select>
+<select id="tf">
+<option>M1</option><option>M5</option><option>M15</option>
+<option>M30</option><option>H1</option><option>H4</option><option>D1</option>
+</select>
+<select id="markerType">
+<option value="all">All Markers</option>
+<option value="swing">Swing High / Low</option>
+<option value="fvg">FVG</option>
+</select>
+<button onclick="drawMarkers()">Refresh Markers</button>
+</div>
+<div id="chart"></div>
+<p class="note">Demo candles are simulated, not live broker prices. Import real OHLC CSV data for meaningful historical testing.</p>
+</section>
+
+<section class="panel">
+<h2>Strategy Tester</h2>
+<div class="controls">
+<label>Fast SMA <input id="fast" type="number" value="10" min="2" max="100" style="width:75px"></label>
+<label>Slow SMA <input id="slow" type="number" value="25" min="3" max="200" style="width:75px"></label>
+<label>Risk % <input id="risk" type="number" value="1" min="0.1" max="5" step="0.1" style="width:75px"></label>
+</div>
+<p class="note">Educational moving-average crossover test. P/L is measured in price units, excluding spread, commission, slippage and contract sizing. Risk % is displayed as a setting only; it is not used to calculate position size.</p>
+<div id="results">Import a CSV or load demo data, then run the backtest.</div>
+</section>
+
+<section class="panel">
+<h2>Price Action Analysis</h2>
+<div id="log">Load demo data or import a CSV to begin.</div>
+</section>
+</main>
+<footer>FX Strategy Lab · Research and simulation only · No live trading connected</footer>
+
+<script>
+let chart,candleSeries,candles=[],markers=[],trades=[];
+const $=id=>document.getElementById(id);
+
+function initChart(){
+const el=$('chart');
+chart=LightweightCharts.createChart(el,{
+width:el.clientWidth,height:el.clientHeight,
+layout:{background:{color:'#111a2b'},textColor:'#c5d2e5'},
+grid:{vertLines:{color:'#202c40'},horzLines:{color:'#202c40'}},
+rightPriceScale:{borderColor:'#35445e'},
+timeScale:{borderColor:'#35445e',timeVisible:true},
+});
+candleSeries=chart.addCandlestickSeries({
+upColor:'#22c99a',downColor:'#ff6378',
+borderUpColor:'#22c99a',borderDownColor:'#ff6378',
+wickUpColor:'#22c99a',wickDownColor:'#ff6378'
+});
+new ResizeObserver(()=>chart.applyOptions({
+width:el.clientWidth,height:el.clientHeight
+})).observe(el);
+}
+
+function loadDemo(){
+candles=[];
+let price=$('market').value==='XAUUSD'?2650:1.08;
+let t=Math.floor(Date.now()/1000)-300*500;
+for(let i=0;i<500;i++){
+let open=price;
+let change=(Math.random()-.485)*(price>10?3:.003);
+let close=Math.max(.0001,open+change);
+let spread=Math.abs(change)*(.3+Math.random());
+candles.push({
+time:t+i*300,open,high:Math.max(open,close)+spread,
+low:Math.min(open,close)-spread,close
+});
+price=close;
+}
+updateChart();
+$('log').textContent='DEMO DATA LOADED\n500 simulated candles.\nThese are not actual market prices.';
+}
+
+function updateChart(){
+if(!candles.length)return;
+candleSeries.setData(candles);
+$('lastPrice').textContent=candles.at(-1).close.toFixed(5);
+$('marketLabel').textContent=$('market').value;
+drawMarkers();
+chart.timeScale().fitContent();
+}
+
+function marketChanged(){loadDemo()}
+
+function drawMarkers(){
+if(!candles.length)return;
+markers=[];
+const type=$('markerType').value;
+if(type==='all'||type==='swing'){
+for(let i=2;i<candles.length-2;i++){
+let c=candles[i];
+if(c.high>candles[i-1].high&&c.high>candles[i-2].high&&c.high>candles[i+1].high&&c.high>candles[i+2].high)
+markers.push({time:c.time,position:'aboveBar',color:'#ff6378',shape:'arrowDown',text:'Swing H'});
+if(c.low<candles[i-1].low&&c.low<candles[i-2].low&&c.low<candles[i+1].low&&c.low<candles[i+2].low)
+markers.push({time:c.time,position:'belowBar',color:'#22c99a',shape:'arrowUp',text:'Swing L'});
+}
+}
+if(type==='all'||type==='fvg'){
+for(let i=2;i<candles.length;i++){
+if(candles[i].low>candles[i-2].high)
+markers.push({time:candles[i].time,position:'belowBar',color:'#5fa8ff',shape:'circle',text:'FVG+'});
+if(candles[i].high<candles[i-2].low)
+markers.push({time:candles[i].time,position:'aboveBar',color:'#c18aff',shape:'circle',text:'FVG-'});
+}
+}
+markers.sort((a,b)=>a.time-b.time);
+candleSeries.setMarkers(markers);
+}
+
+function sma(i,period){
+if(i+1<period)return null;
+let total=0;
+for(let j=i-period+1;j<=i;j++)total+=candles[j].close;
+return total/period;
+}
+
+function runTest(){
+if(candles.length<30){alert('Load data first.');return}
+let fast=+$('fast').value,slow=+$('slow').value;
+if(fast<2||slow<=fast){alert('Slow SMA must be greater than Fast SMA.');return}
+let position=null;
+trades=[];
+for(let i=slow;i<candles.length;i++){
+let pf=sma(i-1,fast),ps=sma(i-1,slow);
+let f=sma(i,fast),s=sma(i,slow);
+if(pf===null||ps===null)continue;
+if(!position&&pf<=ps&&f>s)position={time:candles[i].time,price:candles[i].close};
+else if(position&&pf>=ps&&f<s){
+let pnl=candles[i].close-position.price;
+trades.push({...position,exitTime:candles[i].time,exit:candles[i].close,pnl});
+position=null;
+}
+}
+let wins=trades.filter(t=>t.pnl>0).length;
+let net=trades.reduce((a,t)=>a+t.pnl,0);
+$('winRate').textContent=trades.length?(wins/trades.length*100).toFixed(1)+'%':'0%';
+$('netPL').textContent=net.toFixed(5);
+$('results').innerHTML='<p>Closed trades: <b>'+trades.length+'</b></p>'+
+'<p>Winning trades: <b>'+wins+'</b></p>'+
+'<p>Losing trades: <b>'+(trades.length-wins)+'</b></p>'+
+'<p>Net price-unit P/L: <b>'+net.toFixed(5)+'</b></p>'+
+'<p>Risk setting: '+$('risk').value+'% (not applied to position sizing)</p>';
+$('log').textContent='SMA CROSSOVER TEST\nFast SMA: '+fast+
+'\nSlow SMA: '+slow+'\nClosed trades: '+trades.length+
+'\nNet P/L: '+net.toFixed(5)+
+'\nCosts and realistic position sizing are not included.';
+}
+
+$('csv').addEventListener('change',async e=>{
+const file=e.target.files[0];if(!file)return;
+try{
+const text=await file.text();
+const lines=text.trim().split(/\r?\n/);
+const head=lines.shift().split(',').map(x=>x.trim().toLowerCase());
+const ix=k=>head.indexOf(k);
+const ti=ix('time'),oi=ix('open'),hi=ix('high'),li=ix('low'),ci=ix('close');
+if([oi,hi,li,ci].some(i=>i<0))throw Error('CSV must include Open, High, Low and Close columns.');
+candles=lines.map((line,i)=>{
+const row=line.split(',').map(x=>x.trim());
+let raw=ti>=0?row[ti]:String(i);
+let time;
+if(/^\d+$/.test(raw))time=Number(raw);
+else time=Math.floor(new Date(raw).getTime()/1000);
+return {time,open:+row[oi],high:+row[hi],low:+row[li],close:+row[ci]};
+}).filter(c=>Number.isFinite(c.time)&&[c.open,c.high,c.low,c.close].every(Number.isFinite))
+.sort((a,b)=>a.time-b.time);
+candles=candles.filter((c,i)=>i===0||c.time>candles[i-1].time);
+if(candles.length<3)throw Error('Not enough valid candle rows.');
+$('log').textContent='Imported '+candles.length+' candles from '+file.name;
+updateChart();
+}catch(err){alert('CSV error: '+err.message)}
+e.target.value='';
+});
+
+function downloadTrades(){
+if(!trades.length){alert('Run a backtest first.');return}
+const rows=[['EntryTime','Entry','ExitTime','Exit','PnL'],
+...trades.map(t=>[new Date(t.time*1000).toISOString(),t.price,new Date(t.exitTime*1000).toISOString(),t.exit,t.pnl])];
+const blob=new Blob([rows.map(r=>r.join(',')).join('\n')],{type:'text/csv'});
+const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+a.download='fx-backtest-trades.csv';a.click();URL.revokeObjectURL(a.href);
+}
+initChart();
+loadDemo();
+</script>
+</body>
+</html>
